@@ -1,0 +1,470 @@
+---
+title: "final_analysis_bachelor"
+output:
+  html_document: default
+  pdf_document: default
+date: "2024-12-09"
+---
+
+```{r setup, include=FALSE}
+pacman::p_load('tidyverse', 'emmeans', 'effects')
+```
+
+```{r}
+theme_set(theme_bw())
+```
+
+#### loading in data
+```{r}
+df <- read.csv('/Users/villiamjensen/Downloads/supersickdata.csv')
+```
+
+#### editing data
+```{r}
+df <- df %>%
+  mutate(bloc = ifelse(bloc %in% c("left", "right"), bloc, "fg"))
+
+df <- df %>% 
+  filter(Topic_name != '')
+
+df$bloc <- factor(df$bloc, levels = c("left", "right", 'fg'))
+
+df$ID <- as.numeric(factor(df$Name))
+
+df <- df %>% filter(passed_quality_check == 'True')
+```
+# topic data
+```{r}
+df_topics <- df %>% filter(Topic_name == 'Social Affairs' | 
+                             Topic_name == 'Healthcare'| 
+                           Topic_name == 'Education' | 
+                           Topic_name == 'Foreign Affairs' | 
+                          Topic_name == 'Labour' | 
+                           Topic_name == 'Economy')
+
+topic_counts <- df_topics %>%
+  group_by(Topic_name, ID, sex) %>%
+  summarise(num_statements = n(), .groups = 'drop')
+
+topic_counts <- topic_counts %>% 
+  mutate(gender = ifelse(sex == 'f', 0, 1))
+
+villiam <- topic_counts %>%
+  group_by(gender) %>%
+  summarize(avg_statements = sum(num_statements) / n_distinct(ID))
+
+villiam_weight <- villiam$avg_statements[1]/villiam$avg_statements[2]
+
+topic_counts <- topic_counts %>% 
+  mutate(weighted_statements = ifelse(sex == 'm', num_statements * villiam_weight, num_statements))
+
+
+topical_fruit <- lmerTest::lmer(weighted_statements ~ sex * Topic_name + (1 | ID), data = topic_counts)
+summary(topical_fruit)
+
+#get estimated marginal means for sex within each topic
+emma <- emmeans(topical_fruit, ~ sex | Topic_name) 
+
+#pairwise comparisons for sex within each topic
+pair_emma <- pairs(emma, adjust = 'bonferroni') 
+summary(pair_emma)
+
+emma_df <- as.data.frame(emma)
+emma_df <- emma_df %>% 
+  mutate(gender = ifelse(sex == 'f', 'Female', 'Male'))
+
+# Plot the estimated marginal means
+ggplot(emma_df, aes(x = Topic_name, y = emmean, fill = gender)) +
+  geom_bar(stat = "identity", position = position_dodge()) +
+  geom_errorbar(aes(ymin = lower.CL, ymax = upper.CL), 
+                width = 0.2, position = position_dodge(0.9)) +
+  labs(title = "Estimated Marginal Means of Statements by Topic and Gender",
+       x = "Topic",
+       y = "Estimated Marginal Mean Statements",
+       fill = "Gender") +
+  scale_fill_manual(values = c('#FAA500', '#4161A4')) +
+  theme(axis.text.x = element_text(angle = 0, hjust = 0.5))
+```
+
+
+# emotion data
+
+```{r}
+folder_path <- "/Users/villiamjensen/Downloads/bachelors/emotions_data/"
+
+csv_files <- list.files(path = folder_path, pattern = "*.csv", full.names = TRUE)
+
+combined_df <- do.call(rbind, lapply(csv_files, read.csv))
+
+head(combined_df)
+
+merged_comb <- merge(
+  df, combined_df, by = 'Unnamed..0.1'
+)
+
+emotion_prop <- merged_comb %>%
+  group_by(sex.x, Emotion) %>%
+  summarise(count = n()) %>%
+  mutate(prop = count / sum(count)) %>%
+  ungroup()
+
+emotion_prop <- merged_comb %>%
+  group_by(sex.x, Emotion) %>%
+  summarise(count = n()) %>%
+  mutate(prop = count / sum(count)) %>%
+  ungroup()
+
+
+emotion_result <- emotion_prop%>%
+  group_by(Emotion) %>%
+  summarise(
+    difference = prop[sex.x == 'f'] - prop[sex.x == 'm'],
+    color = ifelse(prop[sex.x == 'f'] > prop[sex.x == 'm'], 'black', '#8ace00')
+  ) %>%
+  filter(!is.na(difference))
+
+
+emotion_result <- emotion_result %>%
+  mutate(Emotion = fct_reorder(Emotion, abs(difference), .desc = TRUE))
+
+ggplot(emotion_result, aes(y = difference, x = Emotion, fill = color)) +
+  geom_bar(stat = 'identity') +
+  scale_fill_manual(
+    values = c('#4161A4', '#FAA500'),
+    labels = c('Male', 'Female'),
+    name = 'Sex'
+  ) +
+  labs(y = 'Difference in Proportion', x = 'Emotion', title = "Difference in Proportion Per Emotion") +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+emotion_prop_left <- merged_comb %>% filter(bloc.x == 'left') %>% 
+  group_by(sex.x, Emotion) %>%
+  summarise(count = n()) %>%
+  mutate(prop = count / sum(count)) %>%
+  ungroup()
+
+emotion_prop_right <- merged_comb %>% filter(bloc.x == 'right') %>% 
+  group_by(sex.x, Emotion) %>%
+  summarise(count = n()) %>%
+  mutate(prop = count / sum(count)) %>%
+  ungroup()
+
+emotion_prop_fg <- merged_comb %>% filter(bloc.x == 'fg') %>% 
+  group_by(sex.x, Emotion) %>%
+  summarise(count = n()) %>%
+  mutate(prop = count / sum(count)) %>%
+  ungroup()
+
+emotion_prop_left %>%
+  ggplot(aes(x = fct_reorder(Emotion, -prop), y = prop, fill = sex.x)) + 
+  geom_bar(stat = "identity", position = "dodge") + 
+  coord_cartesian(ylim = c(0, 0.65)) +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1)) +
+  scale_y_continuous(labels = scales::percent) +
+   scale_fill_manual(
+    values = c('#FAA500', '#4161A4'),
+    labels = c('Female', 'Male'),
+    name = 'Sex'
+    ) +
+  labs(y = "Proportion", x = "Emotion", fill = "Gender", title = "Proportion Per Emotion by Gender - Left Bloc") 
+
+emotion_prop_right %>% 
+  ggplot(aes(x = fct_reorder(Emotion, -prop), y = prop, fill = sex.x)) + 
+  geom_bar(stat = "identity", position = "dodge") + 
+  coord_cartesian(ylim = c(0, 0.65)) +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1)) +
+  scale_y_continuous(labels = scales::percent) +
+   scale_fill_manual(
+    values = c('#FAA500', '#4161A4'),
+    labels = c('Female', 'Male'),
+    name = 'Sex'
+    ) +
+  labs(y = "Proportion", x = "Emotion", fill = "Gender", title = "Proportion Per Emotion by Gender - Right Bloc") 
+
+emotion_prop_fg %>% 
+  ggplot(aes(x = fct_reorder(Emotion, -prop), y = prop, fill = sex.x)) + 
+  geom_bar(stat = "identity", position = "dodge") + 
+   coord_cartesian(ylim = c(0, 0.65)) +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1)) +
+  scale_y_continuous(labels = scales::percent) +
+   scale_fill_manual(
+    values = c('#FAA500', '#4161A4'),
+    labels = c('Female', 'Male'),
+    name = 'Sex'
+    ) +
+  labs(y = "Proportion", x = "Emotion", fill = "Gender", title = "Proportion Per Emotion by Gender - North Atlantic Mandates")
+  
+emotion_prop %>%
+  ggplot(aes(x = fct_reorder(Emotion, -prop), y = prop, fill = sex.x)) + 
+  geom_bar(stat = "identity", position = "dodge") + 
+  theme(axis.text.x = element_text(angle = 45, hjust = 1)) +
+  scale_y_continuous(labels = scales::percent) +
+   scale_fill_manual(
+    values = c('#FAA500', '#4161A4'),
+    labels = c('Female', 'Male'),
+    name = 'Sex'
+    ) +
+  labs(y = "Proportion", x = "Emotion", fill = "Gender", title = "Proportion Per Emotion by Gender") 
+
+```
+#### modelling
+```{r}
+emotions_skr <- merged_comb %>% ###tror det var sådan her jeg lavede emotion_yes
+  group_by(Emotion, ID, sex.x) %>% 
+  summarise(num_statements = n(), .groups = 'drop')
+
+emotions_flip <- emotions_skr
+
+emotions_flip <- emotions_flip %>% filter(Emotion == 'Foragt/Modvilje' | Emotion == 'Forventning/Interrese' | Emotion == 'Tillid/Accept')
+
+hest <- emotions_flip %>%
+  group_by(sex.x) %>%
+  summarize(avg_statements = sum(num_statements) / n_distinct(ID))
+
+mwm_hest <- hest$avg_statements[1] / hest$avg_statements[2]
+
+emotions_flip <- 
+  emotions_flip %>% 
+  mutate(weighted_statements = ifelse(sex.x == 'm', num_statements * mwm_hest, num_statements))
+
+emotion_m1 <- lmerTest::lmer(weighted_statements ~ sex.x * Emotion + (1 | ID), data = emotions_flip)
+
+
+emotions_emma <- emmeans(emotion_m1, ~ sex.x | Emotion, type = "response")
+
+pair_emma_emo <- pairs(emotions_emma, adjust = 'bonferroni')
+summary(pair_emma_emo)
+
+emotions_df <- as.data.frame(emotions_emma)
+emotions_df <- emotions_df %>% 
+  mutate(gender = ifelse(sex.x == 'f', 'Female', 'Male'))
+
+```
+
+#### plotting results
+```{r}
+emotions_df %>%  filter(Emotion == 'Foragt/Modvilje' | Emotion == 'Forventning/Interrese' | Emotion == 'Tillid/Accept') %>% 
+ggplot(aes(x = Emotion, y = emmean, fill = gender)) +
+  geom_bar(stat = "identity", position = position_dodge()) +
+  geom_errorbar(aes(ymin = lower.CL, ymax = upper.CL), 
+                width = 0.2, position = position_dodge(0.9)) +
+  labs(title = "Estimated Marginal Means of Statements by Emotion and Sex",
+       x = "Emotion",
+       y = "Weighted EMMean Statements",
+       fill = "Sex") +
+  scale_fill_manual(values = c('#FAA500', '#4161A4')) +
+  theme(axis.text.x = element_text(angle = 0))
+
+emotion_prop %>%
+  ggplot(aes(x = fct_reorder(Emotion, -prop), y = prop, fill = sex.x)) + 
+  geom_bar(stat = "identity", position = "dodge") + 
+  theme(axis.text.x = element_text(angle = 45, hjust = 1)) +
+  scale_y_continuous(labels = scales::percent) +
+   scale_fill_manual(
+    values = c('#FAA500', '#4161A4'),
+    labels = c('Female', 'Male'),
+    name = 'Sex'
+    ) +
+  labs(y = "Proportion", x = "Emotion", fill = "Gender", title = "Proportion Per Emotion by Gender") 
+
+```
+
+
+#valence
+```{r}
+df$label_pos <- ifelse(df$label == 'positiv', 1, 
+                         ifelse(df$label == 'negativ', -1, 0))
+
+løve <- lmerTest::lmer(label_pos ~ sex * bloc + (1 | Topic_name), data = df)
+summary(løve) 
+
+```
+
+
+#### valence on gender-dominated topics?
+```{r}
+gender_counts <- df %>%
+  group_by(Topic_name, sex) %>%
+  summarise(count = n(), .groups = 'drop')
+
+topic_totals <- gender_counts %>%
+  group_by(Topic_name) %>%
+  summarise(total = sum(count), .groups = 'drop')
+
+gender_proportions <- gender_counts %>%
+  left_join(topic_totals, by = "Topic_name") %>%
+  mutate(gender_proportion = count / total)
+
+df_with_proportions <- df %>%
+  left_join(gender_proportions, by = c("Topic_name", "sex"))
+
+df_with_proportions <- df_with_proportions %>% 
+  mutate(gender_proportions = ifelse(sex == 'f', 1 -gender_proportion, gender_proportion))
+
+df_with_proportions <- df_with_proportions %>% select(gender_proportion, label_pos, sex, Topic_name)
+
+model <- lmerTest::lmer(label_pos ~ gender_proportion * sex + (1 | Topic_name), data = df_with_proportions)
+
+model_summary <- summary(model)
+
+print(model_summary)
+
+coefficients <- model_summary$coefficients
+std_errors <- coefficients[, "Std. Error"]
+
+gender_proportion_values <- seq(0, 1, length.out = 100)
+
+line1_y <- coefficients["(Intercept)", "Estimate"] + 
+           coefficients["gender_proportion", "Estimate"] * gender_proportion_values
+line1_se <- sqrt(std_errors["(Intercept)"]^2 + 
+                 (gender_proportion_values * std_errors["gender_proportion"])^2)
+
+line2_y <- (coefficients["(Intercept)", "Estimate"] + 
+            coefficients["sexm", "Estimate"]) + 
+           (coefficients["gender_proportion", "Estimate"] + 
+            coefficients["gender_proportion:sexm", "Estimate"]) * gender_proportion_values
+line2_se <- sqrt(std_errors["(Intercept)"]^2 + 
+                 std_errors["sexm"]^2 + 
+                 (gender_proportion_values * std_errors["gender_proportion"])^2 + 
+                 (gender_proportion_values * std_errors["gender_proportion:sexm"])^2)
+
+line1_y <- pmin(pmax(line1_y, -1), 1)
+line1_se <- pmin(pmax(line1_se, -1), 1)
+
+line2_y <- pmin(pmax(line2_y, -1), 1)
+line2_se <- pmin(pmax(line2_se, -1), 1)
+
+line1_lower_bound <- pmin(pmax(line1_y - 1.96 * line1_se, -1), 1)
+line1_upper_bound <- pmin(pmax(line1_y + 1.96 * line1_se, -1), 1)
+
+line2_lower_bound <- pmin(pmax(line2_y - 1.96 * line2_se, -1), 1)
+line2_upper_bound <- pmin(pmax(line2_y + 1.96 * line2_se, -1), 1)
+
+plot_data <- data.frame(
+  gender_proportion = rep(gender_proportion_values, 2),
+  predicted_value = c(line1_y, line2_y),
+  lower_bound = c(line1_lower_bound, line2_lower_bound),
+  upper_bound = c(line1_upper_bound, line2_upper_bound),
+  line_type = rep(c("Line 1: Intercept + gender_proportion", 
+                    "Line 2: (Intercept + sexm) + (gender_proportion + gender_proportion:sexm)"), 
+                  each = length(gender_proportion_values))
+)
+
+ggplot(plot_data, aes(x = gender_proportion, y = predicted_value, color = line_type)) +
+  geom_line(size = 1) +
+  geom_errorbar(aes(ymin = lower_bound, ymax = upper_bound), width = 0.02, alpha = 0.1) +
+  labs(
+    title = "Valence and Topic Proportionality by Gender (95% CI)",
+    x = "Male Proportionality",
+    y = "Predicted Value"
+  ) +
+  scale_color_manual(values = c("#FAA500", "#4161A4")) + theme(legend.position = "none")
+```
+
+
+# linguistic complexity
+```{r}
+# Calculate Q1, Q3, and IQR for flesch_kincaid_grade
+Q1 <- quantile(df$flesch_kincaid_grade, 0.25)
+Q3 <- quantile(df$flesch_kincaid_grade, 0.75)
+IQR_value <- IQR(df$flesch_kincaid_grade)
+
+# Define lower and upper bounds for outliers
+lower_bound <- Q1 - 1.5 * IQR_value
+upper_bound <- Q3 + 1.5 * IQR_value
+
+# Remove outliers from flesch_kincaid_grade
+# df_clean <- df_cancel[df_cancel$flesch_kincaid_grade >= lower_bound & df_cancel$flesch_kincaid_grade <= upper_bound, ]
+df_fk <- df[df$flesch_kincaid_grade >= lower_bound & df$flesch_kincaid_grade <= upper_bound, ]
+
+# Calculate Q1, Q3, and IQR for dependency_distance_mean
+Q1 <- quantile(df$dependency_distance_mean, 0.25)
+Q3 <- quantile(df$dependency_distance_mean, 0.75)
+IQR_value <- IQR(df$dependency_distance_mean)
+
+# Define lower and upper bounds for outliers
+lower_bound <- Q1 - 1.5 * IQR_value
+upper_bound <- Q3 + 1.5 * IQR_value
+
+# Remove outliers from dependency_distance_mean
+# df_mdd <- df_clean[df_clean$dependency_distance_mean >= lower_bound & df_clean$dependency_distance_mean <= upper_bound, ]
+df_mdd <- df[df$dependency_distance_mean >= lower_bound & df$dependency_distance_mean <= upper_bound, ]
+
+
+
+```
+
+```{r}
+# Calculate z-scores for flesch_kincaid_grade
+df_mdd$mdd_z <- scale(df_mdd$dependency_distance_mean)
+```
+
+```{r}
+# Calculate z-scores for flesch_kincaid_grade
+df_fk$flesch_z <- scale(df_fk$flesch_kincaid_grade)
+```
+
+```{r}
+nuuk <- lmerTest::lmer(flesch_kincaid_grade ~ sex * bloc + (1 | Topic_name), data = df_fk)
+options(scipen = 999)
+print(summary(nuuk), digits = 3) 
+```
+
+```{r}
+thorshavn <- lmerTest::lmer(mdd_z ~ sex * bloc + (1 | Topic_name), data = df_mdd)
+options(scipen = 999)
+print(summary(thorshavn), digits = 3) 
+```
+
+#### emmeans
+
+```{r}
+emotions_nuuk <- emmeans(nuuk, ~ sex | bloc, type = "response")
+pair_nuuk <- pairs(emotions_nuuk, adjust = 'bonferroni')
+summary(pair_nuuk)
+```
+
+#### visualizations
+
+```{r}
+effects_nuuk <- allEffects(nuuk)
+effects_thorshavn <- allEffects(thorshavn)
+
+effects_df_nuuk <- as.data.frame(effects_nuuk$`sex:bloc`)
+effects_df_thorshavn <- as.data.frame(effects_thorshavn$`sex:bloc`)
+
+effects_df_nuuk$lower <- effects_df_nuuk$fit - 1.96 * effects_nuuk$`sex:bloc`$se
+effects_df_nuuk$upper <- effects_df_nuuk$fit + 1.96 * effects_nuuk$`sex:bloc`$se
+
+effects_df_thorshavn$lower <- effects_df_thorshavn$fit - 1.96 * effects_thorshavn$`sex:bloc`$se
+effects_df_thorshavn$upper <- effects_df_thorshavn$fit + 1.96 * effects_thorshavn$`sex:bloc`$se
+
+p_nuuk <- effects_df_nuuk %>% 
+  ggplot(aes(x = bloc, y = fit, color = sex, group = sex)) +
+  geom_line() +
+  geom_errorbar(aes(ymin = lower, ymax = upper), width = 0.1) +  # Add error bars
+  geom_point() +
+  labs(title = "Interaction Effects of Sex and Bloc",
+       subtitle = 'FKGL ~ Sex * Bloc (1 | Topic)',
+       x = "Bloc",
+       y = "FKGL") +
+  scale_color_manual(values = c('#FAA500', '#4161A4'), labels = c('Female', 'Male')) +
+  scale_x_discrete(labels = c('Left Bloc', 'Right Bloc', 'North Atlantic Mandates'))
+  
+
+p_thorshavn <- effects_df_thorshavn %>% 
+  ggplot(aes(x = bloc, y = fit, color = sex, group = sex)) +
+  geom_line() +
+  geom_errorbar(aes(ymin = lower, ymax = upper), width = 0.1) +  # Add error bars
+  geom_point() +
+  labs(title = "Interaction Effects of Sex and Bloc",
+       subtitle = 'MDD ~ Sex * Bloc (1 | Topic)',
+       x = "Bloc",
+       y = "MDD score (Z-scored)",
+       color = 'Sex') +
+  scale_color_manual(values = c('#FAA500', '#4161A4'), labels = c('Female', 'Male')) +
+  scale_x_discrete(labels = c('Left Bloc', 'Right Bloc', 'North Atlantic Mandates'))
+```
+
+
+
