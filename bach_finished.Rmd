@@ -7,7 +7,7 @@ date: "2024-12-09"
 ---
 
 ```{r setup, include=FALSE}
-pacman::p_load('tidyverse', 'emmeans', 'effects')
+pacman::p_load('tidyverse', 'emmeans', 'effects', 'lme4')
 ```
 
 ```{r}
@@ -35,6 +35,7 @@ df <- df %>% filter(passed_quality_check == 'True')
 ```
 # topic data
 ```{r}
+
 df_topics <- df %>% filter(Topic_name == 'Social Affairs' | 
                              Topic_name == 'Healthcare'| 
                            Topic_name == 'Education' | 
@@ -84,6 +85,47 @@ ggplot(emma_df, aes(x = Topic_name, y = emmean, fill = gender)) +
        fill = "Gender") +
   scale_fill_manual(values = c('#FAA500', '#4161A4')) +
   theme(axis.text.x = element_text(angle = 0, hjust = 0.5))
+```
+```{r}
+df %>% 
+  filter(Topic_name == 'Labour') %>% 
+  summarize(length(Document))
+```
+
+
+```{r}
+#number of statements made
+df %>% filter(bloc == 'fg' & Topic_name == 'Labour') %>% 
+  ggplot(aes(x = fct_infreq(Topic_name), fill = sex)) +
+  geom_bar(position = 'dodge') +
+  labs(x = 'Topic', y = '# of Statements', title = 'Distribution of Statements in Topics by Gender') +
+  scale_fill_manual(values = c("#FAA500", "#4161A4")) +
+  theme(axis.text.x = element_text(angle = 35, hjust = 1))
+```
+
+```{r}
+#topic distribution for all parties
+df_summary <- df %>%
+  group_by(party, Topic_name) %>%
+  summarise(count = n(), .groups = "drop") %>%
+  group_by(party) %>%
+  mutate(percentage = (count / sum(count)) * 100)
+
+unique_parties <- unique(df_summary$party) # Get unique parties
+
+for (party in unique_parties) {
+  party_data <- df_summary %>% filter(party == !!party)
+  
+  plot <- ggplot(party_data, aes(x = reorder(Topic_name, -percentage), y = percentage)) +
+    geom_bar(stat = 'identity', fill = "skyblue") +
+    labs(
+      title = paste("Percentage of Statements by Topic for Party:", party),
+      x = "Topic",
+      y = "Percentage"
+    ) +
+    theme(axis.text.x = element_text(angle = 45, hjust = 1))
+  print(plot)
+}
 ```
 
 
@@ -241,10 +283,37 @@ emotions_df <- emotions_df %>%
 
 ```
 
+```{r}
+
+emotion_prop <- emotion_prop %>%
+  mutate(Emotion_Translated = ifelse(Emotion == "Foragt/Modvilje", "Contempt/Disgust",
+                              ifelse(Emotion == "Forventning/Interrese", "Expectation/Interest",
+                              ifelse(Emotion == "Frygt/Bekymret", "Fear/Worry",
+                              ifelse(Emotion == "Glæde/Sindsro", "Joy/Serenity",
+                              ifelse(Emotion == "Overasket/Målløs", "Surprise/Amazement",
+                              ifelse(Emotion == "Sorg/trist", "Sadness/Sorrow",
+                              ifelse(Emotion == "Tillid/Accept", "Trust/Acceptance",
+                              ifelse(Emotion == "Vrede/Irritation", "Anger/Irritation", NA)))))))))
+
+emotions_df <- emotions_df %>%
+  mutate(Emotion_Translated = ifelse(Emotion == "Foragt/Modvilje", "Contempt/Disgust",
+                              ifelse(Emotion == "Forventning/Interrese", "Expectation/Interest",
+                              ifelse(Emotion == "Frygt/Bekymret", "Fear/Worry",
+                              ifelse(Emotion == "Glæde/Sindsro", "Joy/Serenity",
+                              ifelse(Emotion == "Overasket/Målløs", "Surprise/Amazement",
+                              ifelse(Emotion == "Sorg/trist", "Sadness/Sorrow",
+                              ifelse(Emotion == "Tillid/Accept", "Trust/Acceptance",
+                              ifelse(Emotion == "Vrede/Irritation", "Anger/Irritation", NA)))))))))
+
+
+print(emotion_prop)
+```
+
+
 #### plotting results
 ```{r}
-emotions_df %>%  filter(Emotion == 'Foragt/Modvilje' | Emotion == 'Forventning/Interrese' | Emotion == 'Tillid/Accept') %>% 
-ggplot(aes(x = Emotion, y = emmean, fill = gender)) +
+emotions_df %>%  filter(Emotion %in% c('Foragt/Modvilje', 'Forventning/Interrese', 'Tillid/Accept'))  %>% 
+ggplot(aes(x = Emotion_Translated, y = emmean, fill = gender)) +
   geom_bar(stat = "identity", position = position_dodge()) +
   geom_errorbar(aes(ymin = lower.CL, ymax = upper.CL), 
                 width = 0.2, position = position_dodge(0.9)) +
@@ -256,7 +325,7 @@ ggplot(aes(x = Emotion, y = emmean, fill = gender)) +
   theme(axis.text.x = element_text(angle = 0))
 
 emotion_prop %>%
-  ggplot(aes(x = fct_reorder(Emotion, -prop), y = prop, fill = sex.x)) + 
+  ggplot(aes(x = fct_reorder(Emotion_Translated, -prop), y = prop, fill = sex.x)) + 
   geom_bar(stat = "identity", position = "dodge") + 
   theme(axis.text.x = element_text(angle = 45, hjust = 1)) +
   scale_y_continuous(labels = scales::percent) +
@@ -267,8 +336,31 @@ emotion_prop %>%
     ) +
   labs(y = "Proportion", x = "Emotion", fill = "Gender", title = "Proportion Per Emotion by Gender") 
 
+emotion_prop_wide <- emotion_prop %>%
+  group_by(Emotion_Translated, sex.x) %>%
+  summarise(total_prop = sum(prop)) %>%
+  ungroup()
+
+emotion_prop_wide <- emotion_prop_wide %>%
+  spread(key = sex.x, value = total_prop, fill = 0)
+
+emotion_prop_wide <- emotion_prop_wide %>%
+  mutate(prop_diff = f - m)
+
+ggplot(emotion_prop_wide, aes(x = fct_reorder(Emotion_Translated, -abs(prop_diff)), y = prop_diff, fill = prop_diff > 0)) + 
+  geom_bar(stat = "identity", position = "dodge") + 
+  theme(axis.text.x = element_text(angle = 45, hjust = 1)) + 
+  scale_y_continuous(labels = scales::percent) + 
+  scale_fill_manual(values = c('#4161A4', '#FAA500'), 
+                    labels = c('Proportionally More Male', 'Proportionally More Female'), 
+                    name = 'Sex') + 
+  labs(y = "Proportion Difference", x = "Emotion", fill = "Gender Dominance", title = "Difference in Emotion Proportion")
 ```
 
+```{r}
+emotion_prop %>% group_by(Emotion) %>% 
+  summarize(prop)
+```
 
 #valence
 ```{r}
@@ -276,9 +368,84 @@ df$label_pos <- ifelse(df$label == 'positiv', 1,
                          ifelse(df$label == 'negativ', -1, 0))
 
 løve <- lmerTest::lmer(label_pos ~ sex * bloc + (1 | Topic_name), data = df)
+options(scipen = 999)
 summary(løve) 
 
 ```
+
+```{r}
+
+f_left <- -0.424309 
+m_left <- f_left + (-0.01799)
+f_right <- f_left + 0.035824
+f_fg <- f_left + 0.187590
+m_right <- f_right + (-0.026378)
+m_fg <- f_fg + (-0.125897) 
+
+standard_error <- c(0.029710, 0.0303, 0.0305, 0.0412, 0.0318, 0.0561)
+
+values <- c(
+  f_left = -0.424309,
+  m_left = -0.424309 + (-0.01799),
+  f_right = -0.424309 + 0.035824,
+  f_fg = -0.424309 + 0.187590,
+  m_right = (-0.424309 + 0.035824) + (-0.026378),
+  m_fg = (-0.424309 + 0.187590) + (-0.125897)
+)
+# Assuming `df` is your dataset and the model is fitted
+#model <- lmerTest::lmer(label_pos ~ sex * bloc + (1 | Topic_name), data = df)
+
+# Extracting fixed effects from the model
+fixef_values <- fixef(model)
+
+plot_data <- data.frame(
+  sexbloc = c("f_left", "m_left", "f_right", "f_fg", "m_right", "m_fg"),
+  bloc = c('left', 'left', 'right', 'fg', 'right', 'fg'),
+  sex = c('f', 'm', 'f', 'f', 'm', 'm'),
+  values,
+  standard_error, 
+  effect = c(
+    fixef_values["(Intercept)"],  # f_left: Intercept for female, left bloc
+    fixef_values["(Intercept)"] + fixef_values["sexm"],  # m_left: Intercept + sexm for male, left bloc
+    fixef_values["(Intercept)"] + fixef_values["blocright"],  # f_right: Intercept + blocright for female, right bloc
+    fixef_values["(Intercept)"] + fixef_values["blocfg"],  # f_fg: Intercept + blocfg for female, fg bloc
+    fixef_values["(Intercept)"] + fixef_values["sexm"] + fixef_values["blocright"],  # m_right: Intercept + sexm + blocright for male, right bloc
+    fixef_values["(Intercept)"] + fixef_values["sexm"] + fixef_values["blocfg"]  # m_fg: Intercept + sexm + blocfg for male, fg bloc
+  )
+)
+
+plot_data <- plot_data %>%
+  mutate(sexbloc = factor(sexbloc, levels = c("f_left", "m_left", "f_right", "m_right", "f_fg", "m_fg")),
+         bloc = factor(bloc, levels = c('left', 'right', 'fg')))
+         
+
+# Plot the fixed effects
+# Create a sex_bloc variable in plot_data
+plot_data$sex_bloc <- with(plot_data, paste(sex, bloc, sep = "."))
+
+# Plot with the correct colors
+plot_data %>%
+  ggplot(aes(x = bloc, y = values, col = sex_bloc, shape = sex)) +  # Use sex_bloc for coloring
+  geom_errorbar(aes(ymin = values - standard_error, ymax = values + standard_error), width = 0.2, alpha = 0.45) +
+  geom_point(size = 2) +
+  #geom_line(group = 1) +  # You can uncomment this if you want a line plot
+  labs(title = "Interaction between Gender and Bloc on Valence",
+       x = "Bloc",
+       y = "Valence") +
+  scale_x_discrete(labels = c("left" = "Left", "right" = "Right", "fg" = "NAM")) +
+  scale_color_manual(values = c("m.left" = '#9B1700', "m.right" = '#2E4D78',  
+                               "f.left" = '#F04524', "f.right" = '#698BCE', 
+                               'f.fg' = '#78D641', 'm.fg' = '#3A830E'),
+                     labels = c("m.left" = "Male - Left Bloc",  
+                                "m.right" = "Male - Right Bloc",
+                                "f.left" = "Female - Left Bloc",  
+                                "f.right" = "Female - Right Bloc",
+                                'f.fg' = "Female - North Atlantic Mandate",  
+                                'm.fg' = "Male - North Atlantic Mandate")) +
+  guides(shape = "none", color = guide_legend(title = "Gender and Bloc"))
+
+```
+
 
 
 #### valence on gender-dominated topics?
@@ -394,6 +561,13 @@ df_mdd <- df[df$dependency_distance_mean >= lower_bound & df$dependency_distance
 
 ```
 
+
+```{r}
+df %>% 
+  group_by(bloc, sex) %>% 
+  summarize(length(Document), length(unique(ID)))
+```
+
 ```{r}
 # Calculate z-scores for flesch_kincaid_grade
 df_mdd$mdd_z <- scale(df_mdd$dependency_distance_mean)
@@ -458,13 +632,16 @@ p_thorshavn <- effects_df_thorshavn %>%
   geom_errorbar(aes(ymin = lower, ymax = upper), width = 0.1) +  # Add error bars
   geom_point() +
   labs(title = "Interaction Effects of Sex and Bloc",
-       subtitle = 'MDD ~ Sex * Bloc (1 | Topic)',
+       subtitle = 'MDD ~ Sex * Bloc + (1 | Topic)',
        x = "Bloc",
-       y = "MDD score (Z-scored)",
+       y = "MDD score",
        color = 'Sex') +
   scale_color_manual(values = c('#FAA500', '#4161A4'), labels = c('Female', 'Male')) +
   scale_x_discrete(labels = c('Left Bloc', 'Right Bloc', 'North Atlantic Mandates'))
 ```
 
 
+```{r}
+p_thorshavn
+```
 
